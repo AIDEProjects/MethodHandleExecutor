@@ -15,7 +15,6 @@ android {
 
 dependencies {
 	compile fileTree(dir: 'libs', include: ['*.jar'])
-	compile project(":storage/emulated/0/AppProjects/Libs/Log/")
 	// runtime目录
 	// 用于放置打包jar根目录classes{N}.dex文件
 	// 也支持资源文件
