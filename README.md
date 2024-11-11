@@ -1,0 +1,2 @@
+# MethodHandleExecutor
+自动指令器，输入字符串自动解析并执行目标类方法句柄
