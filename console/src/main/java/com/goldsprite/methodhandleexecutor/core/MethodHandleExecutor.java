@@ -9,28 +9,25 @@ import java.lang.reflect.*;
 import java.util.*;
 
 public class MethodHandleExecutor {
-	private final Map<String, List<MethodHandle>> methodHandles = new HashMap<>();
+	private final Map<String, MethodHandle> methodHandles = new HashMap<>();
 	private final Map<String, Boolean> methodIsStatic = new HashMap<>();  // 存储方法的静态性
 	private Object target;
 
-	public MethodHandleExecutor(Object target) throws Exception {
+	public MethodHandleExecutor(Object target) {
 		this.target = target;
 		initializeMethodHandles(target.getClass());
 	}
-	public MethodHandleExecutor(Class<?> targetClass) throws Exception {
+	public MethodHandleExecutor(Class<?> targetClass) {
 		initializeMethodHandles(targetClass);
 	}
-	public void initializeMethodHandles(Class<?> targetClass) throws Exception {
+	public void initializeMethodHandles(Class<?> targetClass) {
 		MethodHandles.Lookup lookup = MethodHandles.publicLookup();
 
 		for (Method method : targetClass.getMethods()) {
 			MethodHandle handle = getMethodHandle(lookup, targetClass, method);
 			if (handle != null) {
-				String key = method.getName();
-				if (!methodHandles.containsKey(key)){
-					methodHandles.put(key, new ArrayList<MethodHandle>());
-				}
-				methodHandles.get(key).add(handle);
+				String key = buildMethodKey(method.getName(), method.getParameterTypes());
+				methodHandles.put(key, handle);
 				methodIsStatic.put(key, Modifier.isStatic(method.getModifiers()));
 			}
 		}
@@ -50,105 +47,102 @@ public class MethodHandleExecutor {
 		}
 	}
 
-	public Object executeCommand(String commandLine) throws Throwable {
+	public Object executeCommand(String commandLine) {
 		String[] parts = commandLine.split(" ");
 		if (parts.length == 0) {
-			System.out.println("命令行不能为空");
+			Debug.log("命令行不能为空");
 			return null;
 		}
 		// 第一个部分是方法名
 		String command = parts[0];
-
-		List<MethodHandle> handles = methodHandles.get(command);
-		if (handles == null || handles.isEmpty()) {
-			System.out.println("没有这样的方法名.");
-			return null;
+		Debug.debugLog("调用方法句柄: "+commandLine);
+		
+		
+		Object[] args = new Object[parts.length-1];
+		Class[] paramTypes = new Class[parts.length-1];
+		for (int i = 0; i < args.length; i++) {
+			int argIndex = i + 1;
+			Object[] outArg = new Object[]{ parts[argIndex] };
+			paramTypes[i] = parseParamType(outArg);
+			args[i] = outArg[0];
 		}
-
-		MethodHandle handle = null;
-		boolean isStatic = false;
-		Object[] args = null;
-		for (MethodHandle mh : methodHandles.get(command)){
-			Class<?>[] paramTypes = mh.type().parameterArray();
-			isStatic = methodIsStatic.get(command);  // 获取静态性
-			int paramOffset = !isStatic ?1 : 0;
-			int expectedArgsCount = paramTypes.length - paramOffset;
-			if (parts.length - 1 != expectedArgsCount) {
-				System.out.println("参数数量不匹配, 下一个");
-				continue;
-			}
-			try{
-				args = new Object[expectedArgsCount];
-				for (int i = 0; i < expectedArgsCount; i++) {
-					int argIndex = i + 1;  // 第一个命令部分是方法名，args 从第二部分开始
-					args[i] = parseArgument(parts[argIndex], paramTypes[i + paramOffset]);
-				}
-				handle = mh;
-				break;
-			}catch (Exception ignore){
-				System.out.println("参数类型不匹配，下一个");
-			}
-		}
+		String methodKey = buildMethodKey(command, paramTypes);
+		Debug.debugLog("解析方法签名为: "+methodKey);
+		MethodHandle handle = methodHandles.get(methodKey);
 		if (handle == null) {
-			System.out.println("给定方法的参数类型列表没有一个匹配.");
+			Debug.log("找不到对应的方法.");
 			return null;
 		}
+		boolean isStatic = methodIsStatic.get(methodKey);  // 获取静态性
 		if (isStatic && target == null){
-			System.out.println("试图从null调用一个实例方法");
+			Debug.log("试图从null调用一个实例方法");
 			return null;
 		}
 
 		// 调用方法
+		Object ret = null;
+		try{
+			return execMethod(target, handle, isStatic, args);
+		}catch(Throwable e){}
+		return ret;
+	}
+
+	private Object execMethod(Object target, MethodHandle handle, boolean isStatic, Object[] args) throws Throwable
+	{
 		return isStatic ? handle.invokeWithArguments(args) : handle.bindTo(target).invokeWithArguments(args);
 	}
-
-	// 辅助方法：解析参数
-	private Object parseArgument(String arg, Class targetType) {
-		if (targetType == String.class) {
-			return arg;
+	
+	private Class<?> parseParamType(Object[] outArg) {
+		String strArg = (String)outArg[0];
+		boolean isFullType;
+		//匹配并处理int/Integer
+		if (strArg.matches("^-?\\d+I?$")) {
+			if(strArg.endsWith("I")){
+				strArg = strArg.substring(0, strArg.length()-1);
+				outArg[0] = Integer.valueOf(strArg);
+				return Integer.class;
+			}
+			outArg[0] = Integer.parseInt(strArg);
+			return Integer.TYPE;
 		}
-		if (targetType == Integer.class || targetType == int.class) {
-			return Integer.parseInt(arg);
-		} else if (targetType == Long.class || targetType == long.class) {
-			return Long.parseLong(arg);
-		} else if (targetType == Double.class || targetType == double.class) {
-			return Double.parseDouble(arg);
-		} else if (targetType == Float.class || targetType == float.class) {
-			return Float.parseFloat(arg);
-		} else if (targetType == Boolean.class || targetType == boolean.class) {
-			return Boolean.parseBoolean(arg);
+		//匹配并处理long/Long
+		if (strArg.matches("^-?\\d+[lL]$")) {
+			isFullType = strArg.endsWith("L");
+			strArg = strArg.substring(0, strArg.length()-1);
+			outArg[0] = isFullType ?Long.valueOf(strArg) :Long.parseLong(strArg);
+			return isFullType ?Long.class :Long.TYPE;
 		}
-		
-		return arg;
+		//匹配并处理float/Float
+		if (strArg.matches("^-?\\d+(\\.\\d+)?[fF]$")) {
+			isFullType = strArg.endsWith("F");
+			strArg = strArg.substring(0, strArg.length()-1);
+			outArg[0] = isFullType ?Float.valueOf(strArg) :Float.parseFloat(strArg);
+			return isFullType ?Float.class :Float.TYPE;
+		}
+		//匹配并处理double/Double
+		if (strArg.matches("^-?\\d+(\\.\\d+)?[dD]$")) {
+			isFullType = strArg.endsWith("D");
+			strArg = strArg.substring(0, strArg.length()-1);
+			outArg[0] = isFullType ?Double.valueOf(strArg) :Double.parseDouble(strArg);
+			return isFullType ?Double.class :Double.TYPE;
+		}
+		//匹配并处理boolean/Boolean
+		if (strArg.matches("^(?i)(true|false)$")) {
+			isFullType = strArg.matches("^(TRUE|FALSE)$");
+			outArg[0] = isFullType ?Boolean.valueOf(strArg) :Boolean.parseBoolean(strArg);
+			return isFullType ?Boolean.class :Boolean.TYPE;
+		}
+		//其他为String
+		return String.class;
 	}
-
-	public MethodHandle findMatchingHandle(String commandLine){
-		String[] parts = commandLine.split(" ");
-		if (parts.length == 0){
-			throw new IllegalArgumentException("命令行不能为空");
+	
+	// 辅助方法：根据方法名和参数类型构建方法键
+	private String buildMethodKey(String methodName, Class<?>[] paramTypes) {
+		StringBuilder signature = new StringBuilder(methodName);
+		for (Class<?> paramType : paramTypes) {
+			signature.append("_").append(paramType.getName());
 		}
-
-		// 方法名是第一个部分
-		String command = parts[0];
-		List<MethodHandle> handles = methodHandles.get(command);
-		if (handles == null || handles.isEmpty()) {
-			System.out.println("没有这样的方法名.");
-			return null;
-		}
-
-		for (MethodHandle mh : methodHandles.get(command)){
-			Class<?>[] paramTypes = mh.type().parameterArray();
-			try{
-				for (int i=0;i < paramTypes.length;i++){
-					Class paramType = paramTypes[i];
-					String arg = parts[i + 1];
-					parseArgument(arg, paramType);
-				}
-				return mh;
-			}catch (Exception ignore){}
-		}
-		System.out.println("该方法的参数类型列表没有一个匹配.");
-		return null;
+		return signature.toString();
 	}
 
 }
